@@ -10,3 +10,4 @@ seen_jobs.json
 bot_config.json
 linkedin_bot.db
 *.csv
+*.pdf
