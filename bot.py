@@ -17,6 +17,7 @@ from telegram.ext import (
     filters,
 )
 
+from ai_client import chat_completion, resolve_ai_provider
 from config import load_config
 from database import Database
 
@@ -82,22 +83,14 @@ def scrape_all_boards(keyword, location="Worldwide", limit=10):
     return jobs
 
 def analyze_job_with_ai(config, job_title, company, description=""):
-    """Llama a Venice AI o xAI para evaluar la compatibilidad de una vacante."""
-    api_key = config.venice_api_key
-    model = config.venice_model
-    url = "https://api.venice.ai/api/v1/chat/completions"
-    
-    # Fallback a xAI / Grok si Venice no está configurado
-    if not api_key and config.xai_api_key:
-        api_key = config.xai_api_key
-        model = config.xai_model
-        url = "https://api.x.ai/v1/chat/completions"
-        
-    if not api_key:
+    """Evalúa la compatibilidad de una vacante con el proveedor de IA configurado."""
+    if not resolve_ai_provider(config):
         logger.warning("No hay API keys de IA configuradas en .env. Saltando análisis de IA.")
-        return "📊 *Compatibilidad:* No disponible (Configura Venice o xAI en tu .env)"
+        return (
+            "📊 *Compatibilidad:* No disponible\n"
+            "💡 Configura una API en `.env` (ChatGPT, Gemini, Grok u otra compatible)."
+        )
 
-    # Recortar descripción larga para no pasarnos de tokens
     max_desc_len = 1500
     trimmed_desc = description[:max_desc_len] + "..." if len(description) > max_desc_len else description
 
@@ -124,45 +117,18 @@ def analyze_job_with_ai(config, job_title, company, description=""):
         f"Descripción: {trimmed_desc if trimmed_desc else 'No disponible'}"
     )
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message}
-        ],
-        "temperature": 0.3
-    }
-
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=20)
-        if response.status_code == 200:
-            result = response.json()
-            return result["choices"][0]["message"]["content"].strip()
-        else:
-            logger.error(f"Error de API de IA (HTTP {response.status_code}): {response.text}")
-            return "📊 *Compatibilidad:* Error en la consulta de IA."
-    except Exception as e:
-        logger.error(f"Excepción en el análisis de IA: {e}")
-        return "📊 *Compatibilidad:* Error de red en la consulta de IA."
+    content, error = chat_completion(config, system_prompt, user_message, temperature=0.3)
+    if content:
+        return content
+    return f"📊 *Compatibilidad:* {error or 'Error en la consulta de IA.'}"
 
 def generate_cover_letter_with_ai(config, job_title, company):
     """Genera una carta de presentación utilizando la API de IA configurada."""
-    api_key = config.venice_api_key
-    model = config.venice_model
-    url = "https://api.venice.ai/api/v1/chat/completions"
-    
-    if not api_key and config.xai_api_key:
-        api_key = config.xai_api_key
-        model = config.xai_model
-        url = "https://api.x.ai/v1/chat/completions"
-        
-    if not api_key:
-        return "⚠️ No se ha configurado ninguna API de Inteligencia Artificial (Venice o xAI) en el archivo .env."
+    if not resolve_ai_provider(config):
+        return (
+            "⚠️ No hay API de IA configurada.\n"
+            "Agrega una key en `.env`: ChatGPT, Gemini, Grok u otra API compatible."
+        )
 
     user_profile = (
         "El candidato tiene conocimientos básicos de Inteligencia Artificial (Prompting efectivo, automatizaciones, "
@@ -183,29 +149,15 @@ def generate_cover_letter_with_ai(config, job_title, company):
         "4. No uses placeholders vacíos (como [Tu Nombre] o [Fecha]), inventa datos ficticios realistas si es indispensable, o simplemente deja la estructura lista para firmar."
     )
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Redactar carta para {job_title} en {company}."}
-        ],
-        "temperature": 0.7
-    }
-
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=25)
-        if response.status_code == 200:
-            result = response.json()
-            return result["choices"][0]["message"]["content"].strip()
-        else:
-            return f"❌ Error al contactar la API de IA (HTTP {response.status_code})."
-    except Exception as e:
-        return f"❌ Ocurrió un error al generar la carta: {e}"
+    content, error = chat_completion(
+        config,
+        system_prompt,
+        f"Redactar carta para {job_title} en {company}.",
+        temperature=0.7,
+    )
+    if content:
+        return content
+    return f"❌ {error or 'Error al generar la carta.'}"
 
 # --- Manejadores de Comandos del Bot ---
 
